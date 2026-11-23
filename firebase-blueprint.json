@@ -1,0 +1,304 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user account root document with isolated PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "createdAt", "updatedAt"]
+    },
+    "RiskProfile": {
+      "title": "RiskProfile",
+      "description": "User money management and risk management parameters for WinGo 1-minute sessions.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["INR", "BDT", "USD", "COIN"],
+          "maxLength": 10
+        },
+        "startingCapital": {
+          "type": "number"
+        },
+        "currentBankroll": {
+          "type": "number"
+        },
+        "baseBet": {
+          "type": "number"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["flat", "martingale2x", "recovery25x", "recovery3x", "fibonacci", "dalembert"],
+          "maxLength": 32
+        },
+        "maxSteps": {
+          "type": "integer"
+        },
+        "dailyStopLossPct": {
+          "type": "number"
+        },
+        "dailyTakeProfitPct": {
+          "type": "number"
+        },
+        "colorOdds": {
+          "type": "number"
+        },
+        "purpleOdds": {
+          "type": "number"
+        },
+        "numberOdds": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "currency",
+        "startingCapital",
+        "currentBankroll",
+        "baseBet",
+        "strategy",
+        "maxSteps",
+        "dailyStopLossPct",
+        "dailyTakeProfitPct",
+        "colorOdds",
+        "purpleOdds",
+        "numberOdds",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DrawArchive": {
+      "title": "DrawArchive",
+      "description": "Compact daily or batch sequence of WinGo 1-minute draw results (digits 0-9) up to 1500 draws per document.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "dateKey": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "sequence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500,
+          "pattern": "^[0-9]+$"
+        },
+        "drawCount": {
+          "type": "integer"
+        },
+        "startPeriod": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^[a-zA-Z0-9_\\-]*$"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["manual", "bulk", "csv"],
+          "maxLength": 16
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "dateKey",
+        "label",
+        "sequence",
+        "drawCount",
+        "startPeriod",
+        "source",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TradeLog": {
+      "title": "TradeLog",
+      "description": "Individual WinGo bet execution and money/risk management P&L ledger record.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "dateKey": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}$"
+        },
+        "periodId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "betType": {
+          "type": "string",
+          "enum": ["green", "red", "purple", "big", "small", "number"],
+          "maxLength": 16
+        },
+        "selection": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16
+        },
+        "resultDigit": {
+          "type": "integer"
+        },
+        "stake": {
+          "type": "number"
+        },
+        "stepNumber": {
+          "type": "integer"
+        },
+        "odds": {
+          "type": "number"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["win", "loss"],
+          "maxLength": 10
+        },
+        "netPnl": {
+          "type": "number"
+        },
+        "bankrollAfter": {
+          "type": "number"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userId",
+        "dateKey",
+        "periodId",
+        "betType",
+        "selection",
+        "resultDigit",
+        "stake",
+        "stepNumber",
+        "odds",
+        "outcome",
+        "netPnl",
+        "bankrollAfter",
+        "note",
+        "createdAt"
+      ]
+    },
+    "SavedPattern": {
+      "title": "SavedPattern",
+      "description": "Pinned market sequence queries saved by the user for fast pattern tracking.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "sequence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8,
+          "pattern": "^[0-9]+$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "sequence", "label", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user account root document."
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/RiskProfile" },
+      "description": "User money management & risk profile configuration (settingId = riskProfile)."
+    },
+    "/users/{userId}/archives/{archiveId}": {
+      "schema": { "$ref": "#/entities/DrawArchive" },
+      "description": "Daily/batch WinGo 1-minute draw sequence archives (15-30+ days)."
+    },
+    "/users/{userId}/trades/{tradeId}": {
+      "schema": { "$ref": "#/entities/TradeLog" },
+      "description": "Money & risk management trade ledger entries."
+    },
+    "/users/{userId}/patterns/{patternId}": {
+      "schema": { "$ref": "#/entities/SavedPattern" },
+      "description": "Pinned market sequence patterns for live watch."
+    }
+  }
+}

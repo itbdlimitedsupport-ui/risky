@@ -1,0 +1,6 @@
+{
+  "name": "WinGo 1-Min Risk & Pattern Desk",
+  "description": "WinGo 1-minute India color prediction money management, risk management, and 15-30 day historical pattern probability analyzer backed by Firebase Firestore.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
