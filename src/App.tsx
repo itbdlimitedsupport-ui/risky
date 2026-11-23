@@ -18,13 +18,14 @@ import {
   removeArchive,
   removePatternWatch,
   removeTradeLog,
-  saveBulkArchives,
+  saveMultiDayBulkArchives,
   saveRiskProfile,
   subscribeArchives,
   subscribeRiskProfile,
   subscribeSavedPatterns,
   subscribeTrades,
   undoLastDrawInArchive,
+  updateExistingArchive,
 } from './services/firestoreService';
 import { COPY } from './utils/i18n';
 import {
@@ -439,12 +440,15 @@ function WinGoDeskApp() {
           <UploadHistoryView
             lang={lang}
             archives={archives}
-            onAppendLiveDigit={(dateKey, digit, startPeriod) =>
-              appendLiveDraw(user.uid, dateKey, digit, archives, startPeriod)
+            onAppendLiveDigit={(dateKey, digit, startPeriod, tapTimeHHMM) =>
+              appendLiveDraw(user.uid, dateKey, digit, archives, startPeriod, tapTimeHHMM)
             }
             onUndoLastDigit={(arc) => undoLastDrawInArchive(user.uid, arc)}
-            onSaveBulk={(dateKey, label, digits, startPeriod, source) =>
-              saveBulkArchives(user.uid, dateKey, label, digits, startPeriod, source)
+            onSaveBulkMultiDay={(groups, labelBase, startPeriod, source) =>
+              saveMultiDayBulkArchives(user.uid, groups, labelBase, startPeriod, source)
+            }
+            onUpdateArchive={(archiveId, updates) =>
+              updateExistingArchive(user.uid, archiveId, updates)
             }
             onDeleteArchive={(id) => removeArchive(user.uid, id)}
           />

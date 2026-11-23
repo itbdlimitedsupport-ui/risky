@@ -18,6 +18,14 @@ export type TradeOutcome = 'win' | 'loss';
 
 export type HistoryWindow = '15d' | '30d' | 'all';
 
+export type TimeWindowFilter =
+  | 'all'
+  | 'current_hour'
+  | 'morning'
+  | 'afternoon'
+  | 'evening'
+  | 'night';
+
 export type LanguageCode = 'bn' | 'en';
 
 export interface UserProfile {
@@ -53,6 +61,8 @@ export interface DrawArchive {
   sequence: string;
   drawCount: number;
   startPeriod: string;
+  startTime?: string;
+  times?: string;
   source: ArchiveSource;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
@@ -105,6 +115,7 @@ export interface DigitProbability {
 export interface PatternOccurrence {
   archiveId: string;
   dateKey: string;
+  timeStr: string;
   archiveLabel: string;
   index: number;
   periodLabel: string;
@@ -114,6 +125,7 @@ export interface PatternOccurrence {
 
 export interface PatternMatchResult {
   querySequence: string;
+  timeFilter: TimeWindowFilter;
   totalDrawsScanned: number;
   matchCount: number;
   nextDigitStats: DigitProbability[];
@@ -166,4 +178,11 @@ export interface DailyRiskStatus {
   stopLossAmount: number;
   takeProfitAmount: number;
   guardrailLevel: RiskGuardrailLevel;
+}
+
+export interface ParsedDayGroup {
+  dateKey: string;
+  sequence: string;
+  startTime: string;
+  times: string;
 }

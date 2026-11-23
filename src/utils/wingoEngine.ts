@@ -6,11 +6,13 @@ import {
   DrawArchive,
   HistoryWindow,
   MatrixCellStats,
+  ParsedDayGroup,
   PatternMatchResult,
   PatternOccurrence,
   ProgressionStep,
   RiskProfile,
   StakingStrategy,
+  TimeWindowFilter,
   TradeLog,
 } from '../types/wingo';
 
@@ -120,19 +122,170 @@ export function getTodayDateKey(): string {
   return `${y}-${m}-${d}`;
 }
 
+export function getCurrentTimeHHMM(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+export function sanitizeTimeHHMM(raw: string): string {
+  const match = /^([01]?[0-9]|2[0-3]):([0-5][0-9])$/.exec(raw.trim());
+  if (!match) return '00:00';
+  return `${match[1].padStart(2, '0')}:${match[2]}`;
+}
+
+export function addMinutesToHHMM(startHHMM: string, offsetMinutes: number): string {
+  const clean = sanitizeTimeHHMM(startHHMM);
+  const [h, m] = clean.split(':').map(Number);
+  const total = ((h * 60 + m + offsetMinutes) % 1440 + 1440) % 1440;
+  const nh = Math.floor(total / 60);
+  const nm = total % 60;
+  return `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
+}
+
+export function buildSequentialTimesString(startHHMM: string, count: number): string {
+  let out = '';
+  for (let i = 0; i < count; i++) {
+    out += addMinutesToHHMM(startHHMM, i).replace(':', '');
+  }
+  return out;
+}
+
+export function getDrawTimeAt(archive: DrawArchive, index: number): string {
+  if (archive.times && archive.times.length >= (index + 1) * 4) {
+    const chunk = archive.times.slice(index * 4, index * 4 + 4);
+    if (/^[0-9]{4}$/.test(chunk)) {
+      return `${chunk.slice(0, 2)}:${chunk.slice(2, 4)}`;
+    }
+  }
+  return addMinutesToHHMM(archive.startTime || '00:00', index);
+}
+
+export function matchesTimeFilter(
+  hhmm: string,
+  filter: TimeWindowFilter,
+  referenceHHMM?: string
+): boolean {
+  if (filter === 'all') return true;
+  const [hStr, mStr] = hhmm.split(':');
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (Number.isNaN(h) || Number.isNaN(m)) return true;
+  const mins = h * 60 + m;
+
+  switch (filter) {
+    case 'morning':
+      return mins >= 360 && mins < 720; // 06:00 - 11:59
+    case 'afternoon':
+      return mins >= 720 && mins < 1080; // 12:00 - 17:59
+    case 'evening':
+      return mins >= 1080 && mins < 1440; // 18:00 - 23:59
+    case 'night':
+      return mins >= 0 && mins < 360; // 00:00 - 05:59
+    case 'current_hour': {
+      const ref = sanitizeTimeHHMM(referenceHHMM || getCurrentTimeHHMM());
+      const [rh, rm] = ref.split(':').map(Number);
+      const refMins = rh * 60 + rm;
+      const diff = Math.abs(mins - refMins);
+      const wrapDiff = Math.min(diff, 1440 - diff);
+      return wrapDiff <= 60;
+    }
+  }
+}
+
+export function getLast30DaysKeys(): string[] {
+  const keys: string[] = [];
+  const base = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(base);
+    d.setDate(base.getDate() - i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    keys.push(`${y}-${m}-${day}`);
+  }
+  return keys;
+}
+
 export function sanitizeSequenceInput(raw: string): string {
   return raw.replace(/[^0-9]/g, '');
 }
 
 /**
- * Parses CSV or raw text into a clean digit sequence.
- * If lines look like "period,digit" or "date,period,digit", extracts the last single digit column per row.
- * Otherwise extracts all 0-9 digits in order.
+ * Smart multi-format parser for bulk / CSV / time-tagged uploads.
+ * Supports:
+ * 1) Raw digits: "60491827"
+ * 2) Comma/space digits: "6, 0, 4, 9"
+ * 3) Time + digit lines: "18:30 6" or "18:31, 0"
+ * 4) Date + Time + digit CSV lines: "2026-11-23,18:30,6"
  */
-export function parseBulkDigitsFromText(raw: string): string {
+export function parseBulkDrawsSmart(
+  raw: string,
+  defaultDateKey: string,
+  defaultStartTime: string
+): ParsedDayGroup[] {
   const trimmed = raw.trim();
-  if (!trimmed) return '';
+  if (!trimmed) return [];
+
+  const cleanDefaultTime = sanitizeTimeHHMM(defaultStartTime);
   const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  // Check if lines carry explicit dates or HH:MM timestamps
+  const groups = new Map<string, { digits: string[]; times: string[] }>();
+  let structuredLines = 0;
+
+  for (const line of lines) {
+    // Skip header lines
+    if (structuredLines === 0 && /^(date|time|period|draw|result|number)/i.test(line) && !/[0-9]/.test(line)) {
+      continue;
+    }
+
+    const dateMatch = /(20[0-9]{2}-[0-9]{2}-[0-9]{2})/.exec(line);
+    const timeMatch = /\b([01]?[0-9]|2[0-3]):([0-5][0-9])\b/.exec(line);
+
+    if (dateMatch || timeMatch) {
+      // Find the winning single digit (last standalone 0-9 token in the line)
+      const withoutDateAndTime = line
+        .replace(/20[0-9]{2}-[0-9]{2}-[0-9]{2}/g, ' ')
+        .replace(/\b([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?\b/g, ' ');
+      const tokens = withoutDateAndTime.split(/[,\t;|\s\-]+/).filter(Boolean);
+      const digitToken = [...tokens].reverse().find((tok) => /^[0-9]$/.test(tok));
+
+      if (digitToken) {
+        structuredLines += 1;
+        const dKey = dateMatch ? dateMatch[1] : defaultDateKey;
+        const hhmm = timeMatch
+          ? `${timeMatch[1].padStart(2, '0')}${timeMatch[2]}`
+          : '';
+        if (!groups.has(dKey)) {
+          groups.set(dKey, { digits: [], times: [] });
+        }
+        const entry = groups.get(dKey)!;
+        entry.digits.push(digitToken);
+        if (hhmm) entry.times.push(hhmm);
+        continue;
+      }
+    }
+  }
+
+  if (structuredLines > 0 && groups.size > 0) {
+    const out: ParsedDayGroup[] = [];
+    for (const [dateKey, data] of groups.entries()) {
+      const seq = data.digits.join('');
+      const hasExactTimes = data.times.length === seq.length;
+      const startTime = hasExactTimes
+        ? `${data.times[0].slice(0, 2)}:${data.times[0].slice(2, 4)}`
+        : cleanDefaultTime;
+      out.push({
+        dateKey,
+        sequence: seq,
+        startTime,
+        times: hasExactTimes ? data.times.join('') : '',
+      });
+    }
+    return out.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+  }
+
+  // Fallback: tabular "period, digit" without dates/times
   if (lines.length > 1 && lines.every((l) => l.includes(',') || l.includes('\t') || /\s+/.test(l))) {
     const digits: string[] = [];
     let looksTabular = true;
@@ -144,7 +297,6 @@ export function parseBulkDigitsFromText(raw: string): string {
       } else if (cells.length >= 2 && /^[0-9]+$/.test(cells[0]) && /^[0-9]$/.test(cells[1])) {
         digits.push(cells[1]);
       } else if (digits.length === 0 && /period|draw|result|number/i.test(line)) {
-        // Header row, skip
         continue;
       } else {
         looksTabular = false;
@@ -152,10 +304,32 @@ export function parseBulkDigitsFromText(raw: string): string {
       }
     }
     if (looksTabular && digits.length > 0) {
-      return digits.join('');
+      return [
+        {
+          dateKey: defaultDateKey,
+          sequence: digits.join(''),
+          startTime: cleanDefaultTime,
+          times: '',
+        },
+      ];
     }
   }
-  return sanitizeSequenceInput(trimmed);
+
+  const rawDigits = sanitizeSequenceInput(trimmed);
+  if (!rawDigits) return [];
+  return [
+    {
+      dateKey: defaultDateKey,
+      sequence: rawDigits,
+      startTime: cleanDefaultTime,
+      times: '',
+    },
+  ];
+}
+
+export function parseBulkDigitsFromText(raw: string): string {
+  const groups = parseBulkDrawsSmart(raw, getTodayDateKey(), '00:00');
+  return groups.map((g) => g.sequence).join('');
 }
 
 export function filterArchivesByWindow(archives: DrawArchive[], windowMode: HistoryWindow): DrawArchive[] {
@@ -173,7 +347,9 @@ export function filterArchivesByWindow(archives: DrawArchive[], windowMode: Hist
 
 export function analyzeMarketPattern(
   archives: DrawArchive[],
-  rawQuery: string
+  rawQuery: string,
+  timeFilter: TimeWindowFilter = 'all',
+  referenceHHMM?: string
 ): PatternMatchResult {
   const query = sanitizeSequenceInput(rawQuery).slice(0, 8);
   const nextCounts = Array(10).fill(0);
@@ -191,21 +367,27 @@ export function analyzeMarketPattern(
       if (seq.length <= qLen) continue;
       for (let i = 0; i <= seq.length - qLen - 1; i++) {
         if (seq.slice(i, i + qLen) === query) {
-          const nextChar = seq[i + qLen];
+          const nextIndex = i + qLen;
+          const timeStr = getDrawTimeAt(arc, nextIndex);
+          if (!matchesTimeFilter(timeStr, timeFilter, referenceHHMM)) {
+            continue;
+          }
+          const nextChar = seq[nextIndex];
           const nextDigit = Number(nextChar);
           nextCounts[nextDigit] += 1;
           const contextStart = Math.max(0, i - 3);
           const periodNum =
             arc.startPeriod && /^[0-9]+$/.test(arc.startPeriod)
-              ? String(BigInt(arc.startPeriod) + BigInt(i + qLen))
-              : `#${i + qLen + 1}`;
+              ? String(BigInt(arc.startPeriod) + BigInt(nextIndex))
+              : `#${nextIndex + 1}`;
           occurrences.push({
             archiveId: arc.id,
             dateKey: arc.dateKey,
+            timeStr,
             archiveLabel: arc.label,
-            index: i + qLen,
+            index: nextIndex,
             periodLabel: periodNum,
-            contextBefore: seq.slice(contextStart, i + qLen),
+            contextBefore: seq.slice(contextStart, nextIndex),
             nextDigit,
           });
         }
@@ -258,6 +440,7 @@ export function analyzeMarketPattern(
 
   return {
     querySequence: query,
+    timeFilter,
     totalDrawsScanned,
     matchCount,
     nextDigitStats: sortedStats,
@@ -423,7 +606,6 @@ export function evaluateDailyRiskStatus(
   const todayWins = todayTrades.filter((t) => t.outcome === 'win').length;
   const todayLosses = todayTrades.filter((t) => t.outcome === 'loss').length;
 
-  // Compute current consecutive loss streak from most recent trades
   let currentLossStreak = 0;
   for (const t of todayTrades) {
     if (t.outcome === 'loss') {

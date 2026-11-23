@@ -17,11 +17,18 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   ArchiveSource,
   DrawArchive,
+  ParsedDayGroup,
   RiskProfile,
   SavedPattern,
   TradeLog,
 } from '../types/wingo';
-import { createDefaultRiskProfile, sanitizeSequenceInput } from '../utils/wingoEngine';
+import {
+  buildSequentialTimesString,
+  createDefaultRiskProfile,
+  getCurrentTimeHHMM,
+  sanitizeSequenceInput,
+  sanitizeTimeHHMM,
+} from '../utils/wingoEngine';
 
 export async function ensureUserAndRiskProfile(user: User): Promise<void> {
   const userPath = `users/${user.uid}`;
@@ -191,10 +198,13 @@ export async function appendLiveDraw(
   dateKey: string,
   digit: number,
   existingArchives: DrawArchive[],
-  startPeriod = ''
+  startPeriod = '',
+  tapTimeHHMM?: string
 ): Promise<void> {
   const cleanDigit = String(Math.max(0, Math.min(9, Math.trunc(digit))));
   const cleanPeriod = startPeriod.replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 40);
+  const cleanTime = sanitizeTimeHHMM(tapTimeHHMM || getCurrentTimeHHMM());
+  const hhmm4 = cleanTime.replace(':', '');
 
   // Find latest manual archive for this dateKey that still has room (< 1440 draws)
   const target = [...existingArchives]
@@ -204,10 +214,17 @@ export async function appendLiveDraw(
   if (target) {
     const path = `users/${uid}/archives/${target.id}`;
     const nextSeq = target.sequence + cleanDigit;
+    const baseTimes =
+      target.times && target.times.length === target.sequence.length * 4
+        ? target.times
+        : buildSequentialTimesString(target.startTime || '00:00', target.sequence.length);
+    const nextTimes = baseTimes + hhmm4;
+
     try {
       await updateDoc(doc(db, 'users', uid, 'archives', target.id), {
         sequence: nextSeq,
         drawCount: nextSeq.length,
+        times: nextTimes,
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -224,6 +241,8 @@ export async function appendLiveDraw(
         sequence: cleanDigit,
         drawCount: 1,
         startPeriod: cleanPeriod,
+        startTime: cleanTime,
+        times: hhmm4,
         source: 'manual',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -242,9 +261,14 @@ export async function undoLastDrawInArchive(uid: string, archive: DrawArchive): 
       await deleteDoc(ref);
     } else {
       const nextSeq = archive.sequence.slice(0, -1);
+      const nextTimes =
+        archive.times && archive.times.length === archive.sequence.length * 4
+          ? archive.times.slice(0, -4)
+          : '';
       await updateDoc(ref, {
         sequence: nextSeq,
         drawCount: nextSeq.length,
+        times: nextTimes,
         updatedAt: serverTimestamp(),
       });
     }
@@ -253,51 +277,110 @@ export async function undoLastDrawInArchive(uid: string, archive: DrawArchive): 
   }
 }
 
-export async function saveBulkArchives(
+export async function updateExistingArchive(
   uid: string,
-  dateKey: string,
+  archiveId: string,
+  updates: {
+    label: string;
+    sequence: string;
+    startPeriod: string;
+    startTime: string;
+    times?: string;
+  }
+): Promise<void> {
+  const cleanSeq = sanitizeSequenceInput(updates.sequence).slice(0, 1500);
+  if (!cleanSeq) return;
+  const cleanTime = sanitizeTimeHHMM(updates.startTime);
+  const cleanTimes =
+    updates.times && updates.times.length === cleanSeq.length * 4 ? updates.times : '';
+  const path = `users/${uid}/archives/${archiveId}`;
+  try {
+    await updateDoc(doc(db, 'users', uid, 'archives', archiveId), {
+      label: (updates.label.trim() || 'Updated Batch').slice(0, 80),
+      sequence: cleanSeq,
+      drawCount: cleanSeq.length,
+      startPeriod: updates.startPeriod.replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 40),
+      startTime: cleanTime,
+      times: cleanTimes,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function saveMultiDayBulkArchives(
+  uid: string,
+  groups: ParsedDayGroup[],
   labelBase: string,
-  rawDigits: string,
   startPeriod: string,
   source: ArchiveSource
-): Promise<number> {
-  const cleanDigits = sanitizeSequenceInput(rawDigits);
-  if (!cleanDigits) return 0;
-
+): Promise<{ batches: number; totalDraws: number }> {
   const CHUNK_SIZE = 1440;
-  const chunks: string[] = [];
-  for (let i = 0; i < cleanDigits.length; i += CHUNK_SIZE) {
-    chunks.push(cleanDigits.slice(i, i + CHUNK_SIZE));
-  }
-
-  const cleanLabelBase = (labelBase.trim() || `Batch ${dateKey}`).slice(0, 64);
   const cleanPeriod = startPeriod.replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 40);
   const ts = Date.now();
 
-  const batch = writeBatch(db);
-  chunks.forEach((seq, idx) => {
-    const docId = `${source}_${dateKey.replace(/-/g, '')}_${ts}_${idx + 1}`;
-    const docRef = doc(db, 'users', uid, 'archives', docId);
-    const label = chunks.length > 1 ? `${cleanLabelBase} (${idx + 1}/${chunks.length})` : cleanLabelBase;
-    batch.set(docRef, {
-      userId: uid,
-      dateKey,
-      label: label.slice(0, 80),
-      sequence: seq,
-      drawCount: seq.length,
-      startPeriod: cleanPeriod,
-      source,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  });
+  const docsToWrite: {
+    docId: string;
+    payload: Record<string, unknown>;
+  }[] = [];
 
-  try {
-    await batch.commit();
-    return chunks.length;
-  } catch (err) {
-    handleFirestoreError(err, OperationType.CREATE, `users/${uid}/archives`);
+  for (const grp of groups) {
+    const cleanDigits = sanitizeSequenceInput(grp.sequence);
+    if (!cleanDigits) continue;
+    const cleanStartTime = sanitizeTimeHHMM(grp.startTime);
+    const hasTimes = grp.times.length === cleanDigits.length * 4;
+    const chunksCount = Math.ceil(cleanDigits.length / CHUNK_SIZE);
+
+    for (let idx = 0; idx < chunksCount; idx++) {
+      const startIdx = idx * CHUNK_SIZE;
+      const endIdx = startIdx + CHUNK_SIZE;
+      const seq = cleanDigits.slice(startIdx, endIdx);
+      const chunkTimes = hasTimes ? grp.times.slice(startIdx * 4, endIdx * 4) : '';
+      const chunkStartTime = hasTimes
+        ? `${chunkTimes.slice(0, 2)}:${chunkTimes.slice(2, 4)}`
+        : cleanStartTime;
+      const baseName = labelBase.trim() || `Day ${grp.dateKey}`;
+      const label = chunksCount > 1 ? `${baseName} (${idx + 1}/${chunksCount})` : baseName;
+      const docId = `${source}_${grp.dateKey.replace(/-/g, '')}_${ts}_${docsToWrite.length + 1}`;
+
+      docsToWrite.push({
+        docId,
+        payload: {
+          userId: uid,
+          dateKey: grp.dateKey,
+          label: label.slice(0, 80),
+          sequence: seq,
+          drawCount: seq.length,
+          startPeriod: cleanPeriod,
+          startTime: chunkStartTime,
+          times: chunkTimes,
+          source,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    }
   }
+
+  if (docsToWrite.length === 0) return { batches: 0, totalDraws: 0 };
+
+  // Commit in Firestore batches of <= 400
+  for (let i = 0; i < docsToWrite.length; i += 400) {
+    const slice = docsToWrite.slice(i, i + 400);
+    const batch = writeBatch(db);
+    for (const item of slice) {
+      batch.set(doc(db, 'users', uid, 'archives', item.docId), item.payload);
+    }
+    try {
+      await batch.commit();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `users/${uid}/archives`);
+    }
+  }
+
+  const totalDraws = groups.reduce((sum, g) => sum + sanitizeSequenceInput(g.sequence).length, 0);
+  return { batches: docsToWrite.length, totalDraws };
 }
 
 export async function removeArchive(uid: string, archiveId: string): Promise<void> {
